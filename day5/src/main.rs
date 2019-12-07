@@ -11,7 +11,7 @@ const INPUT: &str = "input/input.txt";
 
 type Result<T> = result::Result<T, Box<dyn Error>>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Intcode {
     integers: Vec<i32>,
 }
@@ -56,6 +56,10 @@ enum Opcode {
     Mult = 2,
     Input = 3,
     Output = 4,
+    JumpIfTrue = 5,
+    JumpIfFalse = 6,
+    LessThan = 7,
+    Equals = 8,
     Halt = 99,
 }
 
@@ -66,6 +70,10 @@ impl Opcode {
             Opcode::Mult => 3,
             Opcode::Input => 1,
             Opcode::Output => 1,
+            Opcode::JumpIfTrue => 2,
+            Opcode::JumpIfFalse => 2,
+            Opcode::LessThan => 3,
+            Opcode::Equals => 3,
             Opcode::Halt => 0,
         }
     }
@@ -76,6 +84,10 @@ impl Opcode {
             Opcode::Mult => Some(2),
             Opcode::Input => Some(0),
             Opcode::Output => None,
+            Opcode::JumpIfTrue => None,
+            Opcode::JumpIfFalse => None,
+            Opcode::LessThan => Some(2),
+            Opcode::Equals => Some(2),
             Opcode::Halt => None,
         }
     }
@@ -129,6 +141,7 @@ impl Intcode {
         loop {
             let instruction = Instruction::try_from(self.integers[pointer])?;
             let parameters = self.load_parameters(pointer, &instruction);
+            let mut jump_pointer: Option<usize> = None;
 
             match instruction.opcode {
                 Opcode::Add => {
@@ -143,12 +156,39 @@ impl Intcode {
                 Opcode::Output => {
                     output.push(parameters[0]);
                 }
+                Opcode::JumpIfTrue => {
+                    if parameters[0] != 0 {
+                        jump_pointer = Some(parameters[1] as usize);
+                    }
+                }
+                Opcode::JumpIfFalse => {
+                    if parameters[0] == 0 {
+                        jump_pointer = Some(parameters[1] as usize);
+                    }
+                }
+                Opcode::LessThan => {
+                    if parameters[0] < parameters[1] {
+                        self.integers[parameters[2] as usize] = 1;
+                    } else {
+                        self.integers[parameters[2] as usize] = 0;
+                    }
+                }
+                Opcode::Equals => {
+                    if parameters[0] == parameters[1] {
+                        self.integers[parameters[2] as usize] = 1;
+                    } else {
+                        self.integers[parameters[2] as usize] = 0;
+                    }
+                }
                 Opcode::Halt => {
                     break;
                 }
             }
 
-            pointer += 1 + instruction.opcode.parameter_count() as usize;
+            match jump_pointer {
+                Some(jump_pointer) => pointer = jump_pointer,
+                None => pointer += 1 + instruction.opcode.parameter_count() as usize,
+            }
         }
 
         Ok(output)
@@ -168,12 +208,14 @@ fn solve_part1() -> Result<i32> {
     Ok(intcode.execute(1)?.into_iter().last().ok_or("No output")?)
 }
 
-// fn solve_part2() -> io::Result<i32> {
-// }
+fn solve_part2() -> Result<i32> {
+    let mut intcode = read_intcode(INPUT)?;
+    Ok(intcode.execute(5)?.into_iter().last().ok_or("No output")?)
+}
 
 fn main() -> Result<()> {
-    println!("Part 1: {:?}", solve_part1()?);
-    // println!("Part 2: {}", solve_part2()?);
+    println!("Part 1: {}", solve_part1()?);
+    println!("Part 2: {}", solve_part2()?);
 
     Ok(())
 }
@@ -255,5 +297,61 @@ mod tests {
             intcode.integers,
             vec![3500, 9, 10, 70, 2, 3, 11, 0, 99, 30, 40, 50]
         );
+    }
+
+    #[test]
+    fn less_and_equal_outputs() {
+        let intcode = Intcode {
+            integers: vec![3, 9, 8, 9, 10, 9, 4, 9, 99, -1, 8],
+        };
+        assert_eq!(intcode.clone().execute(8).unwrap(), vec![1]);
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![0]);
+
+        let intcode = Intcode {
+            integers: vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8],
+        };
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![1]);
+        assert_eq!(intcode.clone().execute(9).unwrap(), vec![0]);
+
+        let intcode = Intcode {
+            integers: vec![3, 3, 1108, -1, 8, 3, 4, 3, 99],
+        };
+        assert_eq!(intcode.clone().execute(8).unwrap(), vec![1]);
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![0]);
+
+        let intcode = Intcode {
+            integers: vec![3, 3, 1107, -1, 8, 3, 4, 3, 99],
+        };
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![1]);
+        assert_eq!(intcode.clone().execute(9).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn jump_outputs() {
+        let intcode = Intcode {
+            integers: vec![3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9],
+        };
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![0]);
+        assert_eq!(intcode.clone().execute(1).unwrap(), vec![1]);
+
+        let intcode = Intcode {
+            integers: vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1],
+        };
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![0]);
+        assert_eq!(intcode.clone().execute(1).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn larger_part2_intcode() {
+        let intcode = Intcode {
+            integers: vec![
+                3, 21, 1008, 21, 8, 20, 1005, 20, 22, 107, 8, 21, 20, 1006, 20, 31, 1106, 0, 36,
+                98, 0, 0, 1002, 21, 125, 20, 4, 20, 1105, 1, 46, 104, 999, 1105, 1, 46, 1101, 1000,
+                1, 20, 4, 20, 1105, 1, 46, 98, 99,
+            ],
+        };
+        assert_eq!(intcode.clone().execute(0).unwrap(), vec![999]);
+        assert_eq!(intcode.clone().execute(8).unwrap(), vec![1000]);
+        assert_eq!(intcode.clone().execute(9).unwrap(), vec![1001]);
     }
 }
