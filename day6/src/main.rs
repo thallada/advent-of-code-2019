@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
@@ -77,18 +77,54 @@ fn get_orbit_count_checksum(orbit_map: &OrbitMap) -> u32 {
     checksum
 }
 
+fn get_orbital_transfers(
+    orbit_map: &OrbitMap,
+    source: NodeIndex,
+    destination: NodeIndex,
+    visited: &mut HashSet<NodeIndex>,
+) -> Option<usize> {
+    visited.insert(source);
+    for neighbor in orbit_map.graph.neighbors_undirected(source) {
+        if neighbor == destination {
+            return Some(visited.len());
+        } else if !visited.contains(&neighbor) {
+            if let Some(neighbor_transfers) =
+                get_orbital_transfers(orbit_map, neighbor, destination, &mut visited.clone())
+            {
+                return Some(neighbor_transfers);
+            }
+        }
+    }
+    None
+}
+
 fn solve_part1() -> Result<u32> {
     let orbit_map = read_orbit_map(INPUT)?;
     Ok(get_orbit_count_checksum(&orbit_map))
 }
 
-fn solve_part2() -> Result<i32> {
+fn solve_part2() -> Result<usize> {
     let orbit_map = read_orbit_map(INPUT)?;
-    let you = orbit_map.map.get("YOU").expect("YOU not found in orbit map");
-    let san = orbit_map.map.get("SAN").expect("SAN not found in orbit map");
-    // let mut bfs = Bfs::new(&orbit_map.graph, *you);
-    // that BFS doesn't tell me the edges from node for each iteration. guess I'll roll my own
-    Ok(0)
+    let you = orbit_map
+        .map
+        .get("YOU")
+        .expect("YOU not found in orbit map");
+    let you_mass = orbit_map
+        .graph
+        .neighbors_directed(*you, Direction::Outgoing)
+        .next()
+        .expect("YOU is not orbiting a mass");
+    let san = orbit_map
+        .map
+        .get("SAN")
+        .expect("SAN not found in orbit map");
+    let san_mass = orbit_map
+        .graph
+        .neighbors_directed(*san, Direction::Outgoing)
+        .next()
+        .expect("SAN is not orbiting a mass");
+    let transfers = get_orbital_transfers(&orbit_map, you_mass, san_mass, &mut HashSet::new());
+    Ok(transfers.expect("No path found between YOU and SAN"))
 }
 
 fn main() -> Result<()> {
@@ -103,6 +139,7 @@ mod tests {
     use super::*;
 
     const TEST_INPUT: &str = "input/test.txt";
+    const TEST_INPUT2: &str = "input/test2.txt";
 
     #[test]
     fn reads_orbit_map() {
@@ -137,5 +174,39 @@ mod tests {
     fn gets_orbit_count_checksum() {
         let orbit_map = read_orbit_map(TEST_INPUT).unwrap();
         assert_eq!(get_orbit_count_checksum(&orbit_map), 42)
+    }
+
+    #[test]
+    fn finds_orbital_transfers_between_objects() {
+        let orbit_map = read_orbit_map(TEST_INPUT2).unwrap();
+        assert_eq!(
+            get_orbital_transfers(
+                &orbit_map,
+                *orbit_map.map.get("K").unwrap(),
+                *orbit_map.map.get("I").unwrap(),
+                &mut HashSet::new()
+            ).unwrap(),
+            4
+        );
+
+        assert_eq!(
+            get_orbital_transfers(
+                &orbit_map,
+                *orbit_map.map.get("K").unwrap(),
+                *orbit_map.map.get("J").unwrap(),
+                &mut HashSet::new()
+            ).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            get_orbital_transfers(
+                &orbit_map,
+                *orbit_map.map.get("YOU").unwrap(),
+                *orbit_map.map.get("L").unwrap(),
+                &mut HashSet::new()
+            ).unwrap(),
+            2
+        );
     }
 }
