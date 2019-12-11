@@ -12,7 +12,9 @@ type Result<T> = result::Result<T, Box<dyn Error>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Intcode {
-    integers: Vec<i32>,
+    pub integers: Vec<i32>,
+    pub pointer: usize,
+    pub halted: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,16 +107,23 @@ impl FromStr for Intcode {
     fn from_str(s: &str) -> Result<Intcode> {
         let intcode_string = s.trim().to_string();
 
-        Ok(Intcode {
-            integers: intcode_string
+        Ok(Intcode::new(
+            intcode_string
                 .split(',')
                 .map(|code| code.parse().unwrap())
                 .collect(),
-        })
+        ))
     }
 }
 
 impl Intcode {
+    fn new(integers: Vec<i32>) -> Intcode {
+        Intcode {
+            integers,
+            pointer: 0,
+            halted: false,
+        }
+    }
     fn load_parameters(&self, pointer: usize, instruction: &Instruction) -> Vec<i32> {
         (0..instruction.opcode.parameter_count() as usize)
             .map(|parameter_index| {
@@ -134,13 +143,12 @@ impl Intcode {
     }
 
     pub fn execute(&mut self, inputs: &[i32]) -> Result<Vec<i32>> {
-        let mut pointer = 0;
         let mut input_index = 0;
         let mut output = vec![];
 
         loop {
-            let instruction = Instruction::try_from(self.integers[pointer])?;
-            let parameters = self.load_parameters(pointer, &instruction);
+            let instruction = Instruction::try_from(self.integers[self.pointer])?;
+            let parameters = self.load_parameters(self.pointer, &instruction);
             let mut jump_pointer: Option<usize> = None;
 
             match instruction.opcode {
@@ -151,6 +159,9 @@ impl Intcode {
                     self.integers[parameters[2] as usize] = parameters[0] * parameters[1];
                 }
                 Opcode::Input => {
+                    if input_index >= inputs.len() {
+                        break; // pause execution to wait for more input
+                    }
                     self.integers[parameters[0] as usize] = inputs[input_index];
                     input_index += 1;
                 }
@@ -182,13 +193,14 @@ impl Intcode {
                     }
                 }
                 Opcode::Halt => {
+                    self.halted = true;
                     break;
                 }
             }
 
             match jump_pointer {
-                Some(jump_pointer) => pointer = jump_pointer,
-                None => pointer += 1 + instruction.opcode.parameter_count() as usize,
+                Some(jump_pointer) => self.pointer = jump_pointer,
+                None => self.pointer += 1 + instruction.opcode.parameter_count() as usize,
             }
         }
 
@@ -214,9 +226,7 @@ mod tests {
     fn reads_intcode() {
         assert_eq!(
             read_intcode(TEST_INPUT).unwrap(),
-            Intcode {
-                integers: vec![3, 15, 3, 16, 1002, 16, 10, 16, 1, 16, 15, 15, 4, 15, 99, 0, 0]
-            },
+            Intcode::new(vec![3, 15, 3, 16, 1002, 16, 10, 16, 1, 16, 15, 15, 4, 15, 99, 0, 0]),
         );
     }
 
@@ -249,33 +259,23 @@ mod tests {
 
     #[test]
     fn executes_intcodes() {
-        let mut intcode = Intcode {
-            integers: vec![1, 0, 0, 0, 99],
-        };
+        let mut intcode = Intcode::new(vec![1, 0, 0, 0, 99]);
         intcode.execute(&[0]).unwrap();
         assert_eq!(intcode.integers, vec![2, 0, 0, 0, 99]);
 
-        let mut intcode = Intcode {
-            integers: vec![2, 3, 0, 3, 99],
-        };
+        let mut intcode = Intcode::new(vec![2, 3, 0, 3, 99]);
         intcode.execute(&[0]).unwrap();
         assert_eq!(intcode.integers, vec![2, 3, 0, 6, 99]);
 
-        let mut intcode = Intcode {
-            integers: vec![2, 4, 4, 5, 99, 0],
-        };
+        let mut intcode = Intcode::new(vec![2, 4, 4, 5, 99, 0]);
         intcode.execute(&[0]).unwrap();
         assert_eq!(intcode.integers, vec![2, 4, 4, 5, 99, 9801]);
 
-        let mut intcode = Intcode {
-            integers: vec![1, 1, 1, 4, 99, 5, 6, 0, 99],
-        };
+        let mut intcode = Intcode::new(vec![1, 1, 1, 4, 99, 5, 6, 0, 99]);
         intcode.execute(&[0]).unwrap();
         assert_eq!(intcode.integers, vec![30, 1, 1, 4, 2, 5, 6, 0, 99]);
 
-        let mut intcode = Intcode {
-            integers: vec![1, 9, 10, 3, 2, 3, 11, 0, 99, 30, 40, 50],
-        };
+        let mut intcode = Intcode::new(vec![1, 9, 10, 3, 2, 3, 11, 0, 99, 30, 40, 50]);
         intcode.execute(&[0]).unwrap();
         assert_eq!(
             intcode.integers,
@@ -285,55 +285,41 @@ mod tests {
 
     #[test]
     fn less_and_equal_outputs() {
-        let intcode = Intcode {
-            integers: vec![3, 9, 8, 9, 10, 9, 4, 9, 99, -1, 8],
-        };
+        let intcode = Intcode::new(vec![3, 9, 8, 9, 10, 9, 4, 9, 99, -1, 8]);
         assert_eq!(intcode.clone().execute(&[8]).unwrap(), vec![1]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![0]);
 
-        let intcode = Intcode {
-            integers: vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8],
-        };
+        let intcode = Intcode::new(vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![1]);
         assert_eq!(intcode.clone().execute(&[9]).unwrap(), vec![0]);
 
-        let intcode = Intcode {
-            integers: vec![3, 3, 1108, -1, 8, 3, 4, 3, 99],
-        };
+        let intcode = Intcode::new(vec![3, 3, 1108, -1, 8, 3, 4, 3, 99]);
         assert_eq!(intcode.clone().execute(&[8]).unwrap(), vec![1]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![0]);
 
-        let intcode = Intcode {
-            integers: vec![3, 3, 1107, -1, 8, 3, 4, 3, 99],
-        };
+        let intcode = Intcode::new(vec![3, 3, 1107, -1, 8, 3, 4, 3, 99]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![1]);
         assert_eq!(intcode.clone().execute(&[9]).unwrap(), vec![0]);
     }
 
     #[test]
     fn jump_outputs() {
-        let intcode = Intcode {
-            integers: vec![3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9],
-        };
+        let intcode = Intcode::new(vec![3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![0]);
         assert_eq!(intcode.clone().execute(&[1]).unwrap(), vec![1]);
 
-        let intcode = Intcode {
-            integers: vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1],
-        };
+        let intcode = Intcode::new(vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![0]);
         assert_eq!(intcode.clone().execute(&[1]).unwrap(), vec![1]);
     }
 
     #[test]
     fn larger_part2_intcode() {
-        let intcode = Intcode {
-            integers: vec![
+        let intcode = Intcode::new(vec![
                 3, 21, 1008, 21, 8, 20, 1005, 20, 22, 107, 8, 21, 20, 1006, 20, 31, 1106, 0, 36,
                 98, 0, 0, 1002, 21, 125, 20, 4, 20, 1105, 1, 46, 104, 999, 1105, 1, 46, 1101, 1000,
                 1, 20, 4, 20, 1105, 1, 46, 98, 99,
-            ],
-        };
+            ]);
         assert_eq!(intcode.clone().execute(&[0]).unwrap(), vec![999]);
         assert_eq!(intcode.clone().execute(&[8]).unwrap(), vec![1000]);
         assert_eq!(intcode.clone().execute(&[9]).unwrap(), vec![1001]);
@@ -341,11 +327,9 @@ mod tests {
 
     #[test]
     fn multiple_input_intcode() {
-        let intcode = Intcode {
-            integers: vec![
+        let intcode = Intcode::new(vec![
                 3, 15, 3, 16, 1002, 16, 10, 16, 1, 16, 15, 15, 4, 15, 99, 0, 0,
-            ],
-        };
+            ]);
         assert_eq!(intcode.clone().execute(&[1, 1]).unwrap(), vec![11]);
     }
 }
