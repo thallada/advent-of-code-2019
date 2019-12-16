@@ -12,9 +12,10 @@ type Result<T> = result::Result<T, Box<dyn Error>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Intcode {
-    pub integers: HashMap<usize, i32>,
+    pub integers: HashMap<usize, i64>,
     pub pointer: usize,
     pub halted: bool,
+    pub relative_base: i64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -23,25 +24,18 @@ pub struct Instruction {
     parameter_modes: Vec<ParameterMode>,
 }
 
-impl TryFrom<i32> for Instruction {
+impl TryFrom<i64> for Instruction {
     type Error = Box<dyn Error>;
 
-    fn try_from(integer: i32) -> Result<Self> {
+    fn try_from(integer: i64) -> Result<Self> {
         let opcode: Opcode = Opcode::try_from((integer % 100) as u8)?;
         let modes_integer = integer / 100;
         let mut parameter_modes = vec![];
         for parameter_index in 0..opcode.parameter_count() {
-            parameter_modes.push(match opcode.target_parameter_index() {
-                Some(target_parameter_index)
-                    if target_parameter_index == parameter_index as usize =>
-                {
-                    ParameterMode::Position
-                }
-                _ => ParameterMode::try_from(
-                    (modes_integer % (10_i32.pow(parameter_index + 1))
-                        / 10_i32.pow(parameter_index)) as u8,
-                )?,
-            })
+            parameter_modes.push(ParameterMode::try_from(
+                (modes_integer % (10_i64.pow(parameter_index + 1)) / 10_i64.pow(parameter_index))
+                    as u8,
+            )?)
         }
         Ok(Instruction {
             opcode,
@@ -61,6 +55,7 @@ pub enum Opcode {
     JumpIfFalse = 6,
     LessThan = 7,
     Equals = 8,
+    RelativeBaseOffset = 9,
     Halt = 99,
 }
 
@@ -75,6 +70,7 @@ impl Opcode {
             Opcode::JumpIfFalse => 2,
             Opcode::LessThan => 3,
             Opcode::Equals => 3,
+            Opcode::RelativeBaseOffset => 1,
             Opcode::Halt => 0,
         }
     }
@@ -89,6 +85,7 @@ impl Opcode {
             Opcode::JumpIfFalse => None,
             Opcode::LessThan => Some(2),
             Opcode::Equals => Some(2),
+            Opcode::RelativeBaseOffset => None,
             Opcode::Halt => None,
         }
     }
@@ -99,6 +96,7 @@ impl Opcode {
 pub enum ParameterMode {
     Position = 0,
     Immediate = 1,
+    Relative = 2,
 }
 
 impl FromStr for Intcode {
@@ -116,52 +114,75 @@ impl FromStr for Intcode {
 }
 
 impl Intcode {
-    fn new(integers: HashMap<usize, i32>) -> Intcode {
+    fn new(integers: HashMap<usize, i64>) -> Intcode {
         Intcode {
             integers,
             pointer: 0,
             halted: false,
+            relative_base: 0,
         }
     }
-    fn load_parameters(&self, pointer: usize, instruction: &Instruction) -> Vec<i32> {
+
+    fn load_parameters(&mut self, pointer: usize, instruction: &Instruction) -> Vec<i64> {
         (0..instruction.opcode.parameter_count() as usize)
             .map(|parameter_index| {
-                let mut integer = self.integers[&(pointer + parameter_index + 1)];
-                if let ParameterMode::Position = instruction.parameter_modes[parameter_index] {
-                    match instruction.opcode.target_parameter_index() {
+                let mut integer = *self
+                    .integers
+                    .entry(pointer + parameter_index + 1)
+                    .or_insert(0);
+                match instruction.parameter_modes[parameter_index] {
+                    ParameterMode::Position => match instruction.opcode.target_parameter_index() {
                         Some(target_parameter_index)
                             if target_parameter_index == parameter_index => {}
                         _ => {
-                            integer = self.integers[&(integer as usize)];
+                            integer = *self.integers.entry(integer as usize).or_insert(0);
                         }
-                    }
+                    },
+                    ParameterMode::Relative => match instruction.opcode.target_parameter_index() {
+                        Some(target_parameter_index)
+                            if target_parameter_index == parameter_index =>
+                        {
+                            integer += self.relative_base;
+                        }
+                        _ => {
+                            integer = *self
+                                .integers
+                                .entry((self.relative_base + integer) as usize)
+                                .or_insert(0);
+                        }
+                    },
+                    _ => {}
                 }
                 integer
             })
             .collect()
     }
 
-    pub fn execute(&mut self, inputs: &[i32]) -> Result<Vec<i32>> {
+    pub fn execute(&mut self, inputs: &[i64]) -> Result<Vec<i64>> {
         let mut input_index = 0;
         let mut output = vec![];
 
         loop {
-            let instruction = Instruction::try_from(self.integers[&self.pointer])?;
+            let instruction =
+                Instruction::try_from(*self.integers.entry(self.pointer).or_insert(0))?;
             let parameters = self.load_parameters(self.pointer, &instruction);
             let mut jump_pointer: Option<usize> = None;
 
             match instruction.opcode {
                 Opcode::Add => {
-                    self.integers.insert(parameters[2] as usize, parameters[0] + parameters[1]);
+                    self.integers
+                        .insert(parameters[2] as usize, parameters[0] + parameters[1]);
                 }
                 Opcode::Mult => {
-                    self.integers.insert(parameters[2] as usize, parameters[0] * parameters[1]);
+                    self.integers
+                        .insert(parameters[2] as usize, parameters[0] * parameters[1]);
                 }
                 Opcode::Input => {
                     if input_index >= inputs.len() {
                         break; // pause execution to wait for more input
                     }
-                    self.integers.insert(parameters[0] as usize, inputs[input_index]);
+                    self.integers
+                        .insert(parameters[0] as usize, inputs[input_index]);
                     input_index += 1;
                 }
                 Opcode::Output => {
@@ -190,6 +211,9 @@ impl Intcode {
                     } else {
                         self.integers.insert(parameters[2] as usize, 0);
                     }
+                }
+                Opcode::RelativeBaseOffset => {
+                    self.relative_base += parameters[0];
                 }
                 Opcode::Halt => {
                     self.halted = true;
@@ -403,5 +427,35 @@ mod tests {
             .collect(),
         );
         assert_eq!(intcode.clone().execute(&[1, 1]).unwrap(), vec![11]);
+    }
+
+    #[test]
+    fn relative_base_offset_quine() {
+        let code = vec![
+            109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99,
+        ];
+        let intcode = Intcode::new(code.clone().into_iter().enumerate().collect());
+        assert_eq!(intcode.clone().execute(&[]).unwrap(), code);
+    }
+
+    #[test]
+    fn sixteen_digit_output() {
+        let code = vec![1102, 34915192, 34915192, 7, 4, 7, 99, 0];
+        let intcode = Intcode::new(code.into_iter().enumerate().collect());
+        assert_eq!(intcode.clone().execute(&[]).unwrap(), [1219070632396864]);
+    }
+
+    #[test]
+    fn large_output() {
+        let code = vec![104, 1125899906842624, 99];
+        let intcode = Intcode::new(code.into_iter().enumerate().collect());
+        assert_eq!(intcode.clone().execute(&[]).unwrap(), [1125899906842624]);
+    }
+
+    #[test]
+    fn relative_target_parameters() {
+        let code = vec![109, 1, 203, 2, 204, 2, 99];
+        let intcode = Intcode::new(code.into_iter().enumerate().collect());
+        assert_eq!(intcode.clone().execute(&[123]).unwrap(), [123]);
     }
 }
