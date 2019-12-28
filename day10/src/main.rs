@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
+use std::iter::FromIterator;
 use std::result;
 
 use num::integer::gcd;
@@ -22,47 +24,65 @@ struct AsteroidField {
 }
 
 impl AsteroidField {
+    fn get_lines_of_sight(&self, from_point: &Point) -> HashMap<(i32, i32), VecDeque<&Point>> {
+        let mut lines_of_sight: HashMap<(i32, i32), VecDeque<&Point>> = HashMap::new();
+        for asteroid in self.asteroids.iter() {
+            if from_point != asteroid {
+                let x_dist: i32 = asteroid.x as i32 - from_point.x as i32;
+                let y_dist: i32 = asteroid.y as i32 - from_point.y as i32;
+                let mut x_ratio: i32 = 0;
+                let mut y_ratio: i32 = 0;
+                if x_dist == 0 {
+                    if y_dist > 0 {
+                        y_ratio = 1;
+                    } else {
+                        y_ratio = -1;
+                    }
+                } else if y_dist == 0 {
+                    if x_dist > 0 {
+                        x_ratio = 1;
+                    } else {
+                        x_ratio = -1;
+                    }
+                } else {
+                    let gcd = gcd(x_dist, y_dist);
+                    x_ratio = x_dist / gcd;
+                    y_ratio = y_dist / gcd;
+                }
+
+                lines_of_sight
+                    .entry((x_ratio, y_ratio))
+                    .and_modify(|deque| {
+                        let mut insertion_index = None;
+                        for (index, current) in deque.iter().enumerate() {
+                            if (current.x as i32 - from_point.x as i32).abs() > x_dist.abs()
+                                && (current.y as i32 - from_point.y as i32).abs() > y_dist.abs()
+                            {
+                                insertion_index = Some(index);
+                                break;
+                            }
+                        }
+                        if let Some(index) = insertion_index {
+                            deque.insert(index, asteroid);
+                        } else {
+                            deque.push_back(asteroid);
+                        }
+                    })
+                    .or_insert_with(|| {
+                        let mut deque = VecDeque::new();
+                        deque.push_back(asteroid);
+                        deque
+                    });
+            }
+        }
+        lines_of_sight
+    }
+
     fn find_monitoring_station(&self) -> (&Point, usize) {
         let mut asteroid_detect_scores = HashMap::new();
-        for asteroid in self.asteroids.iter() {
-            let mut lines_of_sight: HashMap<(i32, i32), Point> = HashMap::new();
-            for other in self.asteroids.iter() {
-                if asteroid != other {
-                    let x_dist: i32 = other.x as i32 - asteroid.x as i32;
-                    let y_dist: i32 = other.y as i32 - asteroid.y as i32;
-                    let mut x_ratio: i32 = 0;
-                    let mut y_ratio: i32 = 0;
-                    if x_dist == 0 {
-                        if y_dist > 0 {
-                            y_ratio = 1;
-                        } else {
-                            y_ratio = -1;
-                        }
-                    } else if y_dist == 0 {
-                        if x_dist > 0 {
-                            x_ratio = 1;
-                        } else {
-                            x_ratio = -1;
-                        }
-                    } else {
-                        let gcd = gcd(x_dist, y_dist);
-                        x_ratio = x_dist / gcd;
-                        y_ratio = y_dist / gcd;
-                    }
-                    lines_of_sight
-                        .entry((x_ratio, y_ratio))
-                        .and_modify(|current| {
-                            if (current.x as i32 - asteroid.x as i32).abs() > x_dist.abs()
-                                && (current.y as i32 - asteroid.y as i32).abs() > y_dist.abs()
-                            {
-                                current.x = other.x;
-                                current.y = other.y;
-                            }
-                        })
-                        .or_insert(other.clone());
-                }
-            }
 
+        for asteroid in self.asteroids.iter() {
+            let lines_of_sight = self.get_lines_of_sight(asteroid);
             asteroid_detect_scores.insert(asteroid, lines_of_sight.len());
         }
 
@@ -70,6 +90,48 @@ impl AsteroidField {
             .into_iter()
             .max_by_key(|score| score.1)
             .expect("No asteroid detect scores")
+    }
+
+    fn vaporize_asteroids(&mut self, laser_point: &Point) -> Option<&Point> {
+        let mut vaporized_counter = 0;
+        let mut lines_of_sight = self.get_lines_of_sight(laser_point);
+        let mut directions: Vec<(i32, i32)> = lines_of_sight.keys().map(|key| *key).collect();
+        directions.sort_by(|a, b| {
+            let det = a.0 * b.1 - b.0 * a.1;
+            if det > 0 {
+                Ordering::Less
+            } else if det < 0 {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        });
+        let up = directions
+            .iter()
+            .position(|&dir| dir == (0, -1))
+            .expect("No asteroid directly up from laser");
+        directions.rotate_left(up);
+        dbg!(&directions);
+
+        for direction in directions.iter() {
+            // dbg!(direction);
+            let in_sight = lines_of_sight.get_mut(direction);
+            if let Some(in_sight) = in_sight {
+                // dbg!(&in_sight);
+                if let Some(vaporized_asteroid) = in_sight.pop_back() {
+                    vaporized_counter += 1;
+
+                    // dbg!(&vaporized_counter);
+                    // dbg!(&vaporized_asteroid);
+
+                    if vaporized_counter == 200 {
+                        return Some(vaporized_asteroid);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -94,8 +156,10 @@ fn solve_part1() -> Result<usize> {
     Ok(asteroid_field.find_monitoring_station().1)
 }
 
-fn solve_part2() -> Result<i64> {
-    Ok(1)
+fn solve_part2() -> Result<usize> {
+    let mut asteroid_field = read_asteroid_field("input/test5.txt")?;
+    let vaporized200 = asteroid_field.vaporize_asteroids(&Point { x: 11, y: 13 }).unwrap();
+    Ok(vaporized200.x * 100 + vaporized200.y)
 }
 
 fn main() -> Result<()> {
