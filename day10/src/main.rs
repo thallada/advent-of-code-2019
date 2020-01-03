@@ -3,7 +3,6 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
-use std::iter::FromIterator;
 use std::result;
 
 use num::integer::gcd;
@@ -97,32 +96,21 @@ impl AsteroidField {
         let mut lines_of_sight = self.get_lines_of_sight(laser_point);
         let mut directions: Vec<(i32, i32)> = lines_of_sight.keys().map(|key| *key).collect();
         directions.sort_by(|a, b| {
-            let det = a.0 * b.1 - b.0 * a.1;
-            if det > 0 {
-                Ordering::Less
-            } else if det < 0 {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
+            let a_deg = (a.1 as f32).atan2(a.0 as f32);
+            let b_deg = (b.1 as f32).atan2(b.0 as f32);
+            a_deg.partial_cmp(&b_deg).unwrap_or(Ordering::Equal)
         });
         let up = directions
             .iter()
             .position(|&dir| dir == (0, -1))
             .expect("No asteroid directly up from laser");
         directions.rotate_left(up);
-        dbg!(&directions);
 
         for direction in directions.iter() {
-            // dbg!(direction);
             let in_sight = lines_of_sight.get_mut(direction);
             if let Some(in_sight) = in_sight {
-                // dbg!(&in_sight);
                 if let Some(vaporized_asteroid) = in_sight.pop_back() {
                     vaporized_counter += 1;
-
-                    // dbg!(&vaporized_counter);
-                    // dbg!(&vaporized_asteroid);
 
                     if vaporized_counter == 200 {
                         return Some(vaporized_asteroid);
@@ -157,8 +145,8 @@ fn solve_part1() -> Result<usize> {
 }
 
 fn solve_part2() -> Result<usize> {
-    let mut asteroid_field = read_asteroid_field("input/test5.txt")?;
-    let vaporized200 = asteroid_field.vaporize_asteroids(&Point { x: 11, y: 13 }).unwrap();
+    let mut asteroid_field = read_asteroid_field(INPUT)?;
+    let vaporized200 = asteroid_field.vaporize_asteroids(&Point { x: 22, y: 25 }).unwrap();
     Ok(vaporized200.x * 100 + vaporized200.y)
 }
 
