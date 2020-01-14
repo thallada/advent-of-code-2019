@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error::Error;
-use std::result;
 use std::fmt;
+use std::result;
 
 use num_enum::TryFromPrimitive;
 
@@ -32,16 +32,52 @@ struct Coordinate {
 
 #[derive(Debug)]
 struct Game {
+    intcode: Intcode,
     tiles: HashMap<Coordinate, Tile>,
+    ball: Option<Coordinate>,
+    paddle: Option<Coordinate>,
     score: i64,
 }
 
 impl Game {
-    fn new() -> Game {
+    fn new(intcode: Intcode) -> Game {
         Game {
+            intcode,
             tiles: HashMap::new(),
+            ball: None,
+            paddle: None,
             score: 0,
         }
+    }
+
+    fn update(&mut self, output: Vec<i64>) -> Result<()> {
+        for index in (0..output.len()).step_by(3) {
+            if output[index] == -1 {
+                self.score = output[index + 2];
+            } else {
+                let x = output[index];
+                let y = output[index + 1];
+                let coord = Coordinate { x, y };
+                let tile = Tile::try_from(output[index + 2] as u8)?;
+
+                if tile == Tile::Ball {
+                    self.ball = Some(coord);
+                } else if tile == Tile::HorizontalPaddle {
+                    self.paddle = Some(coord);
+                }
+
+                self.tiles.insert(Coordinate { x, y }, tile);
+            }
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, input: Option<i64>) -> Result<()> {
+        let output = self
+            .intcode
+            .execute(&[input.unwrap_or(0)])
+            .expect("Failed to execute intcode");
+        self.update(output)
     }
 }
 
@@ -80,11 +116,7 @@ impl fmt::Display for Game {
         for y in up_left_corner.y..=down_right_corner.y {
             let mut row_string = String::new();
             for x in up_left_corner.x..=down_right_corner.x {
-                row_string += match self
-                    .tiles
-                    .get(&Coordinate { x, y })
-                    .unwrap_or(&Tile::Empty)
-                {
+                row_string += match self.tiles.get(&Coordinate { x, y }).unwrap_or(&Tile::Empty) {
                     Tile::Empty => " ",
                     Tile::Wall => "|",
                     Tile::Block => "#",
@@ -99,41 +131,34 @@ impl fmt::Display for Game {
 }
 
 fn solve_part1() -> Result<i64> {
-    let mut intcode = read_intcode(INPUT)?;
-    let output = intcode.execute(&[0]).expect("Failed to execute intcode");
-    let mut game = Game::new();
-    for index in (0..output.len()).step_by(3) {
-        let x = output[index];
-        let y = output[index + 1];
-        let tile = Tile::try_from(output[index + 2] as u8)?;
-        game.tiles.insert(Coordinate { x, y }, tile);
-    }
+    let intcode = read_intcode(INPUT)?;
+    let mut game = Game::new(intcode);
+    game.step(None)?;
     Ok(game.tiles.values().fold(0, |acc, tile| {
         if *tile == Tile::Block {
-            return acc + 1
+            return acc + 1;
         }
         acc
     }))
 }
 
 fn solve_part2() -> Result<i64> {
-    let mut intcode = read_intcode(INPUT)?;
-    let mut output = intcode.execute(&[]).expect("Failed to execute intcode");
-    let mut game = Game::new();
-    while !intcode.halted {
-        for index in (0..output.len()).step_by(3) {
-            if output[index] == -1 {
-                game.score = output[index + 2];
-            } else {
-                let x = output[index];
-                let y = output[index + 1];
-                let tile = Tile::try_from(output[index + 2] as u8)?;
-                game.tiles.insert(Coordinate { x, y}, tile);
+    let intcode = read_intcode(INPUT)?;
+    let mut game = Game::new(intcode);
+    let mut input;
+    while !game.intcode.halted {
+        input = 0;
+        if let Some(ball_coord) = game.ball {
+            if let Some(paddle_coord) = game.paddle {
+                if ball_coord.x > paddle_coord.x {
+                    input = 1;
+                } else if ball_coord.x < paddle_coord.x {
+                    input = -1;
+                }
             }
         }
-        print!("{}", game);
-        // TODO: move the joystick correctly
-        output = intcode.execute(&[0]).expect("Failed to execute intcode");
+
+        game.step(Some(input))?;
     }
     Ok(game.score)
 }
